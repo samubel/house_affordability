@@ -59,7 +59,11 @@
                     headers: { 'X-Api-Key': API_NINJAS_KEY }
                 });
                 const rateData = await rateRes.json();
-                let baseRate = rateData[0].frm_30; // 30yr fixed
+                console.log('Mortgage rate data:', rateData); // Log for debugging
+                if (!rateData || !rateData[0] || !rateData[0].frm_30) {
+                    throw new Error('No valid mortgage rate data returned.');
+                }
+                let baseRate = rateData[0].frm_30;
                 
                 // Adjust rate by credit score
                 let rateAdj = 0;
@@ -76,14 +80,16 @@
                     headers: { 'X-Api-Key': API_NINJAS_KEY }
                 });
                 const taxData = await taxRes.json();
+                console.log('Tax data:', taxData); // Log for debugging
                 const taxRate = taxData[0] ? taxData[0].property_tax_50th_percentile : 0.011; // Default 1.1% if fail
                 
-                // Fetch avg home price suggestion
-                const avgPriceRes = await fetch(`https://api.rentcast.io/v1/markets/${zip}`, {
-                    headers: { 'X-Api-Key': RENTCAST_KEY }
+                // Fetch avg home price suggestion (corrected endpoint and header)
+                const avgPriceRes = await fetch(`https://api.rentcast.io/v1/markets?zip_codes=${zip}`, {
+                    headers: { 'Authorization': `Bearer ${RENTCAST_KEY}` }
                 });
                 const avgPriceData = await avgPriceRes.json();
-                const avgHomePrice = avgPriceData.saleData ? avgPriceData.saleData.averagePrice : 'N/A';
+                console.log('Avg price data:', avgPriceData); // Log for debugging
+                const avgHomePrice = avgPriceData && avgPriceData.length > 0 && avgPriceData[0].saleData ? avgPriceData[0].saleData.averagePrice : 'N/A';
                 
                 // Constants
                 const loanTermYears = 30;
@@ -106,8 +112,8 @@
                 // Check min 20% down
                 const closingCosts = maxPrice * closingCostPct;
                 const downPayment = cash - closingCosts;
-                if (downPayment < maxPrice * 0.2) {
-                    document.getElementById('result').innerHTML = '<p>Insufficient cash for 20% down + closing costs. Max affordable: $0</p>';
+                if (downPayment < maxPrice * 0.2 || isNaN(maxPrice) || maxPrice <= 0) {
+                    document.getElementById('result').innerHTML = '<p>Insufficient cash for 20% down + closing costs or invalid calculation. Max affordable: $0</p>';
                     return;
                 }
                 
@@ -115,11 +121,11 @@
                 document.getElementById('result').innerHTML = `
                     <p><strong>Max Home Price You Can Afford:</strong> $${maxPrice.toLocaleString()}</p>
                     <p><strong>Suggested Avg Price in Zip ${zip}:</strong> $${typeof avgHomePrice === 'number' ? avgHomePrice.toLocaleString() : avgHomePrice}</p>
-                    <p>Adjusted Interest Rate: ${adjRate}% | Tax Rate: ${(taxRate * 100).toFixed(2)}%</p>
+                    <p>Adjusted Interest Rate: ${adjRate.toFixed(2)}% | Tax Rate: ${(taxRate * 100).toFixed(2)}%</p>
                 `;
             } catch (error) {
                 document.getElementById('result').innerHTML = '<p>Error fetching data. Check console or API keys.</p>';
-                console.error(error);
+                console.error('Error details:', error);
             }
         });
     </script>
