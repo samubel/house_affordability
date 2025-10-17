@@ -38,32 +38,41 @@
     <p class="disclaimer">This is an estimate, not financial advice. Assumes conventional loan. Data from APIs; rates as of now.</p>
 
     <script>
-        const API_NINJAS_KEY = 'Q64xJleRtzhsgxOZy+28QA==Jk5rcHliO6ZD1W0m'; // Replace with your key
-        const RENTCAST_KEY = '4230a50f24624ea1aab910a2cb613f2d'; // Replace with your key
+        const API_NINJAS_KEY = 'Q64xJleRtzhsgxOZy+28QA==Jk5rcHliO6ZD1W0m'; // Your old Ninjas key—REGENERATE NEW ONE NOW
+        const RENTCAST_KEY = '859d458dfa2d4926bbab91a45b4a90aa'; // Your old RentCast key—REGENERATE NEW ONE NOW
+        const FRED_KEY = 'e08a5be321f406e162033e8e3a8457ff'; // Your old FRED key—REGENERATE NEW ONE NOW
         
         document.getElementById('calcForm').addEventListener('submit', async (e) => {
             e.preventDefault();
-            const zip = document.getElementById('zip').value;
+            const zip = document.getElementById('zip').value.trim();
             const credit = parseInt(document.getElementById('credit').value);
             const monthly = parseFloat(document.getElementById('monthly').value);
             const cash = parseFloat(document.getElementById('cash').value);
             
-            if (credit < 620) {
-                document.getElementById('result').innerHTML = '<p>Error: Credit score too low for conventional loan.</p>';
+            if (credit < 620 || isNaN(credit)) {
+                document.getElementById('result').innerHTML = '<p>Error: Invalid credit score.</p>';
+                return;
+            }
+            if (isNaN(monthly) || isNaN(cash) || monthly <= 0 || cash <= 0) {
+                document.getElementById('result').innerHTML = '<p>Error: Invalid payment or cash amount.</p>';
                 return;
             }
             
+            let baseRate = 7.0; // Default fallback
+            let adjRate = baseRate;
+            let taxRate = 0.011; // Default 1.1%
+            let avgHomePrice = 'N/A';
+            
             try {
-                // Fetch mortgage rate
-                const rateRes = await fetch('https://api.api-ninjas.com/v1/mortgagerate', {
-                    headers: { 'X-Api-Key': API_NINJAS_KEY }
-                });
+                // Fetch mortgage rate from FRED
+                const rateRes = await fetch(`https://api.stlouisfed.org/fred/series/observations?series_id=MORTGAGE30US&api_key=${FRED_KEY}&file_type=json&limit=1&sort_order=desc`);
                 const rateData = await rateRes.json();
-                console.log('Mortgage rate data:', rateData); // Log for debugging
-                if (!rateData || !rateData[0] || !rateData[0].frm_30) {
-                    throw new Error('No valid mortgage rate data returned.');
+                console.log('FRED rate data:', rateData);
+                if (rateData && rateData.observations && rateData.observations[0] && rateData.observations[0].value !== '.') {
+                    baseRate = parseFloat(rateData.observations[0].value);
+                } else {
+                    console.warn('FRED rate fallback used');
                 }
-                let baseRate = rateData[0].frm_30;
                 
                 // Adjust rate by credit score
                 let rateAdj = 0;
@@ -73,23 +82,31 @@
                 else if (credit >= 660) rateAdj = 0.75;
                 else if (credit >= 640) rateAdj = 1.25;
                 else if (credit >= 620) rateAdj = 1.75;
-                const adjRate = baseRate + rateAdj;
+                adjRate = baseRate + rateAdj;
                 
-                // Fetch property tax rate
+                // Fetch property tax rate (API Ninjas)
                 const taxRes = await fetch(`https://api.api-ninjas.com/v1/propertytax?zip=${zip}`, {
                     headers: { 'X-Api-Key': API_NINJAS_KEY }
                 });
                 const taxData = await taxRes.json();
-                console.log('Tax data:', taxData); // Log for debugging
-                const taxRate = taxData[0] ? taxData[0].property_tax_50th_percentile : 0.011; // Default 1.1% if fail
+                console.log('Tax data:', taxData);
+                if (taxData && taxData[0] && taxData[0].property_tax_50th_percentile) {
+                    taxRate = taxData[0].property_tax_50th_percentile;
+                } else {
+                    console.warn('Tax rate fallback used');
+                }
                 
-                // Fetch avg home price suggestion (corrected endpoint and header)
+                // Fetch avg home price (RentCast)
                 const avgPriceRes = await fetch(`https://api.rentcast.io/v1/markets?zip_codes=${zip}`, {
                     headers: { 'Authorization': `Bearer ${RENTCAST_KEY}` }
                 });
                 const avgPriceData = await avgPriceRes.json();
-                console.log('Avg price data:', avgPriceData); // Log for debugging
-                const avgHomePrice = avgPriceData && avgPriceData.length > 0 && avgPriceData[0].saleData ? avgPriceData[0].saleData.averagePrice : 'N/A';
+                console.log('RentCast data:', avgPriceData);
+                if (avgPriceData && avgPriceData.length > 0 && avgPriceData[0].saleData && avgPriceData[0].saleData.averagePrice) {
+                    avgHomePrice = avgPriceData[0].saleData.averagePrice;
+                } else {
+                    console.warn('Avg price fallback used');
+                }
                 
                 // Constants
                 const loanTermYears = 30;
@@ -101,31 +118,38 @@
                 const rm = adjRate / 100 / 12;
                 const n = loanTermYears * 12;
                 const k = (taxRate + insuranceRateAnnual) / 12;
-                const f = (1 - Math.pow(1 + rm, -n)) / rm;
+                let f = 0;
+                if (rm > 0) {
+                    f = (1 - Math.pow(1 + rm, -n)) / rm;
+                } else {
+                    f = n;
+                }
                 
                 // Formula for max P
                 const numerator = (monthly - hoaMonthly) * f + cash;
                 const denominator = 1 + k * f + closingCostPct;
                 let maxPrice = numerator / denominator;
-                maxPrice = Math.floor(maxPrice / 100) * 100; // Round down to nearest 100
+                if (isNaN(maxPrice) || maxPrice < 0) maxPrice = 0;
+                maxPrice = Math.floor(maxPrice / 100) * 100;
                 
                 // Check min 20% down
                 const closingCosts = maxPrice * closingCostPct;
                 const downPayment = cash - closingCosts;
-                if (downPayment < maxPrice * 0.2 || isNaN(maxPrice) || maxPrice <= 0) {
-                    document.getElementById('result').innerHTML = '<p>Insufficient cash for 20% down + closing costs or invalid calculation. Max affordable: $0</p>';
+                if (downPayment < maxPrice * 0.2 || maxPrice <= 0) {
+                    document.getElementById('result').innerHTML = '<p>Warning: Insufficient cash for 20% down + costs. Try higher cash or lower payment. Max: $0</p>';
                     return;
                 }
                 
                 // Output
-                document.getElementById('result').innerHTML = `
-                    <p><strong>Max Home Price You Can Afford:</strong> $${maxPrice.toLocaleString()}</p>
-                    <p><strong>Suggested Avg Price in Zip ${zip}:</strong> $${typeof avgHomePrice === 'number' ? avgHomePrice.toLocaleString() : avgHomePrice}</p>
-                    <p>Adjusted Interest Rate: ${adjRate.toFixed(2)}% | Tax Rate: ${(taxRate * 100).toFixed(2)}%</p>
-                `;
+                let avgPriceDisplay = (typeof avgHomePrice === 'number') ? '$' + avgHomePrice.toLocaleString() : avgHomePrice;
+                document.getElementById('result').innerHTML = 
+                    '<p><strong>Max Home Price You Can Afford:</strong> $' + maxPrice.toLocaleString() + '</p>' +
+                    '<p><strong>Suggested Avg Price in Zip ' + zip + ':</strong> ' + avgPriceDisplay + '</p>' +
+                    '<p>Adjusted Interest Rate: ' + adjRate.toFixed(2) + '% | Tax Rate: ' + (taxRate * 100).toFixed(2) + '%</p>' +
+                    '<p>(Used defaults if API data unavailable—check console for details.)</p>';
             } catch (error) {
-                document.getElementById('result').innerHTML = '<p>Error fetching data. Check console or API keys.</p>';
-                console.error('Error details:', error);
+                document.getElementById('result').innerHTML = '<p>Error: ' + error.message + '. Using defaults. Check API keys/console.</p>';
+                console.error('Full error:', error);
             }
         });
     </script>
